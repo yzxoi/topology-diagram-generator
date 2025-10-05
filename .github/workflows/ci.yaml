@@ -35,6 +35,7 @@ jobs:
             qt_arch: win64_msvc2022_64
 
     runs-on: ${{ matrix.os }}
+
     defaults:
       run:
         shell: bash
@@ -57,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v2
+          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v3
 
       - name: Install aqt & tools
         run: |
@@ -102,24 +103,39 @@ jobs:
       - name: Locate Qt
         run: |
           set -e
-          QT_CONFIG=$(find "$QT_ROOT" -type f -name Qt6Config.cmake -print -quit)
+          QT_CONFIG="$(find "$QT_ROOT" -type f -name Qt6Config.cmake -print -quit)"
           if [ -z "$QT_CONFIG" ]; then
             echo "Qt6Config.cmake not found under $QT_ROOT" >&2
             exit 1
           fi
-          # .../<arch>/lib/cmake/Qt6/Qt6Config.cmake -> .../<arch>
-          QT_DIR=$(dirname "$(dirname "$(dirname "$QT_CONFIG")")")
-          echo "QT_DIR=$QT_DIR" | tee -a "$GITHUB_ENV"
-          echo "Qt6_DIR=$QT_DIR/lib/cmake/Qt6" | tee -a "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$QT_DIR" | tee -a "$GITHUB_ENV"
-          echo "Found Qt at: $QT_DIR"
-          ls -al "$QT_DIR/lib/cmake/Qt6/Qt6Config.cmake"
+
+          # Qt6_DIR = 包含 Qt6Config.cmake 的目录：.../<arch>/lib/cmake/Qt6
+          Qt6_DIR="$(dirname "$QT_CONFIG")"
+
+          # <arch> 根：从 Qt6_DIR 回退 3 层（Qt6 -> cmake -> lib -> <arch>）
+          QT_PREFIX="$(dirname "$(dirname "$(dirname "$Qt6_DIR")")")"
+
+          echo "Qt6_DIR=$Qt6_DIR"           | tee -a "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$QT_PREFIX" | tee -a "$GITHUB_ENV"
+          echo "QT_PREFIX=$QT_PREFIX"       | tee -a "$GITHUB_ENV"
+
+          echo "== Sanity check =="
+          ls -al "$Qt6_DIR/Qt6Config.cmake"
+
+      - name: Add Qt to PATH (runtime)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "PATH=$QT_PREFIX/bin;$PATH" >> "$GITHUB_ENV"
+          else
+            echo "PATH=$QT_PREFIX/bin:$PATH" >> "$GITHUB_ENV"
+          fi
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
+            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
+            -DQt6_DIR="${Qt6_DIR}"
 
       - name: Build
         run: cmake --build build --config "${BUILD_TYPE}" -j
