@@ -1,81 +1,129 @@
-name: CI (Qt6 / CMake / C++17)
+name: CMake Qt6 CI (Linux/macOS/Windows)
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.6.3"
+  BUILD_TYPE: "Release"
+  QT_ROOT: ${{ github.workspace }}/.qt
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }} (${{ matrix.build_type }})
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} | Qt ${{ env.QT_VERSION }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        build_type: [Release]
+        include:
+          - os: ubuntu-latest
+            host: linux
+            target: desktop
+            qt_arch: gcc_64
+          - os: macos-latest
+            host: mac
+            target: desktop
+            qt_arch: clang_64
+          - os: windows-latest
+            host: windows
+            target: desktop
+            qt_arch: win64_msvc2022_64
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --------- Install Ninja ----------
-      - name: Install deps (Linux)
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.QT_ROOT }}
+          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v1
+
+      - name: Install aqtinstall + build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install aqtinstall==3.* ninja cmake
+
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build
+          sudo apt-get install -y \
+            build-essential \
+            libx11-dev libx11-xcb-dev libxext-dev libxrender-dev \
+            libxcb1-dev libxcb-util-dev libxcb-image0-dev libxcb-render0-dev \
+            libxcb-randr0-dev libxcb-keysyms1-dev libxcb-icccm4-dev \
+            libxkbcommon-x11-0 libgl1-mesa-dev
 
-      - name: Install deps (macOS)
-        if: runner.os == 'macOS'
+      - name: Install Qt via aqt
+        if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
-          brew update
-          brew install ninja
+          mkdir -p "${QT_ROOT}"
+          python -m aqt install-qt \
+            "${{ matrix.host }}" "${{ matrix.target }}" "${QT_VERSION}" \
+            -O "${QT_ROOT}" \
+            ${{ matrix.qt_arch }} \
+            -m qtsvg
 
-      - name: Install deps (Windows)
-        if: runner.os == 'Windows'
+      - name: Locate Qt
         run: |
-          choco install ninja --no-progress
+          QT_DIR=$(python - <<'PY'
+import os, glob
+root = os.environ["QT_ROOT"]
+candidates = sorted(glob.glob(os.path.join(root, "**", "lib", "cmake", "Qt6")), key=len)
+if not candidates:
+    raise SystemExit("Qt6 CMake package not found under " + root)
+qt_dir = os.path.dirname(os.path.dirname(candidates[0]))  # .../lib/cmake/Qt6 -> .../
+print(qt_dir)
+PY
+          )
+          echo "QT_DIR=$QT_DIR"
+          echo "QT_DIR=$QT_DIR" >> "$GITHUB_ENV"
 
-      # --------- Install Qt 6 ----------
-      - name: Set up Qt 6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.6.3'
-          cache: true
-          modules: 'qtbase'
-
-      # --------- Configure & Build ----------
-      - name: Configure (CMake + Ninja)
+      - name: Configure (CMake)
         run: |
-          cmake -S . -B build -G Ninja \
-                -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-                -DCMAKE_PREFIX_PATH="$QTDIR"
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_PREFIX_PATH="${QT_DIR}"
 
       - name: Build
-        run: cmake --build build --config ${{ matrix.build_type }} -j 8
-
-      # --------- (Optional) Smoke Test ----------
-      - name: Run (Linux/macOS)
-        if: runner.os != 'Windows'
         run: |
-          (./build/src/topology_diagram_generator --version) || true
+          cmake --build build --config "${BUILD_TYPE}" -j
 
-      - name: Run (Windows)
-        if: runner.os == 'Windows'
+      - name: Test
+        if: hashFiles('CTestTestfile.cmake', 'build/CTestTestfile.cmake') != ''
         run: |
-          (build\src\topology_diagram_generator.exe --version) || ver
+          ctest --test-dir build --output-on-failure -C "${BUILD_TYPE}"
 
-      # --------- Upload Artifacts ----------
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: topology-${{ runner.os }}-${{ matrix.build_type }}
+          name: build-${{ runner.os }}
+          path: build
           if-no-files-found: warn
-          path: |
-            build/src/topology_diagram_generator*
-            build/src/*.exe
-            build/src/*.dll
-            build/src/*.dylib
-            build/src/*.so
