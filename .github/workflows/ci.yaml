@@ -74,17 +74,18 @@ jobs:
             libxcb1-dev libxcb-util-dev libxcb-image0-dev libxcb-render0-dev \
             libxcb-randr0-dev libxcb-keysyms1-dev libxcb-icccm4-dev \
             libxkbcommon-x11-0 libgl1-mesa-dev
+
       - name: Detect available Qt modules (qtsvg)
         run: |
           set -e
-          # 列出该 host/arch 下该版本的可选模块；失败也不致命
           MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VERSION}" "${{ matrix.qt_arch }}" || true)
-          echo "Available modules: $MODS"
-          if echo "$MODS" | grep -qw qtsvg; then
+          echo "Available modules:"
+          echo "$MODS"
+          if echo "$MODS" | tr ' ' '\n' | grep -Fxq 'qtsvg'; then
             echo "AQT_MODULES=-m qtsvg" >> "$GITHUB_ENV"
             echo "Will install with: -m qtsvg"
           else
-            echo "qtsvg not listed for Qt ${QT_VERSION} (${ { matrix.host } }/${ { matrix.qt_arch } }); installing base Qt only."
+            echo "qtsvg not listed for Qt ${QT_VERSION} (${{ matrix.host }}/${{ matrix.qt_arch }}); installing base Qt only."
             echo "AQT_MODULES=" >> "$GITHUB_ENV"
           fi
 
