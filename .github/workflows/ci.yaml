@@ -58,7 +58,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install "aqtinstall==3.*" ninja
 
-      - name: Minimal Linux deps (for Qt Widgets/XCB)
+      - name: Minimal Linux deps (Qt Widgets/XCB)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -101,7 +101,7 @@ jobs:
       - name: Detect qtsvg module
         run: |
           set -e
-          ARCH="$(grep '^QT_ARCH=' "$GITHUB_ENV" | cut -d= -f2)"
+          ARCH="${QT_ARCH:-${{ matrix.qt_arch }}}"
           MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VERSION}" "$ARCH" || true)
           if echo "$MODS" | tr ' ' '\n' | grep -Fxq 'qtsvg'; then
             echo "AQT_MODULES=-m qtsvg" >> "$GITHUB_ENV"
@@ -113,7 +113,7 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
           set -e
-          ARCH="$(grep '^QT_ARCH=' "$GITHUB_ENV" | cut -d= -f2)"
+          ARCH="${QT_ARCH:-${{ matrix.qt_arch }}}"
           mkdir -p "$QT_ROOT"
           python -m aqt install-qt \
             "${{ matrix.host }}" desktop "${QT_VERSION}" \
@@ -145,6 +145,10 @@ jobs:
 
       - name: Build
         run: cmake --build build --config "${BUILD_TYPE}" -j
+
+      - name: Test (optional)
+        if: hashFiles('build/CTestTestfile.cmake') != ''
+        run: ctest --test-dir build --output-on-failure -C "${BUILD_TYPE}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
