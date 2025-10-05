@@ -15,6 +15,7 @@ concurrency:
 
 env:
   QT_VERSION: "6.9.2"
+  QT_VERSION_FALLBACK: "6.7.3"
   BUILD_TYPE: Release
   QT_ROOT: ${{ github.workspace }}/.qt
 
@@ -65,44 +66,56 @@ jobs:
           sudo apt-get install -y \
             build-essential libgl1-mesa-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-x11-0
 
-      - name: Resolve Qt arch
+      - name: Resolve Qt version & arch
         id: resolve
         run: |
           set -e
+          # 解析架构
           if [ "${{ runner.os }}" = "Windows" ]; then
             LIST="$(python -m aqt list-qt windows desktop --arch "${QT_VERSION}")" || LIST=""
-            echo "Windows arch list for Qt ${QT_VERSION}: $LIST"
             LIST_NL="$(echo "$LIST" | tr ' ' '\n')"
             PICK=""
             for a in win64_msvc2022_64 win64_msvc2019_64 win64_mingw; do
               if echo "$LIST_NL" | grep -Fxq "$a"; then PICK="$a"; break; fi
             done
-            if [ -z "$PICK" ]; then
-              PICK="$(echo "$LIST_NL" | head -n1)"
-            fi
-            if [ -z "$PICK" ]; then
-              echo "No Windows arch found for Qt ${QT_VERSION}" >&2
-              exit 1
-            fi
-            echo "QT_ARCH=$PICK" >> "$GITHUB_ENV"
-            echo "arch=$PICK" >> "$GITHUB_OUTPUT"
+            if [ -z "$PICK" ]; then PICK="$(echo "$LIST_NL" | head -n1)"; fi
+            if [ -z "$PICK" ]; then echo "No Windows arch for Qt ${QT_VERSION}"; exit 1; fi
+            QT_ARCH="$PICK"
           else
-            echo "QT_ARCH=${{ matrix.qt_arch }}" >> "$GITHUB_ENV"
-            echo "arch=${{ matrix.qt_arch }}" >> "$GITHUB_OUTPUT"
+            QT_ARCH="${{ matrix.qt_arch }}"
           fi
+
+          # 解析版本（Linux/macOS 若首选不可用则回退 6.7.3）
+          QT_VER="${QT_VERSION}"
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            ARCHS="$(python -m aqt list-qt "${{ matrix.host }}" desktop --arch "${QT_VER}" || true)"
+            if ! echo "$ARCHS" | tr ' ' '\n' | grep -Fxq "$QT_ARCH"; then
+              echo "Qt ${QT_VER} lacks arch ${QT_ARCH} on ${{ matrix.host }}, falling back to ${QT_VERSION_FALLBACK}"
+              QT_VER="${QT_VERSION_FALLBACK}"
+              ARCHS_FB="$(python -m aqt list-qt "${{ matrix.host }}" desktop --arch "${QT_VER}" || true)"
+              if ! echo "$ARCHS_FB" | tr ' ' '\n' | grep -Fxq "$QT_ARCH"; then
+                echo "Fallback ${QT_VER} still lacks arch ${QT_ARCH} on ${{ matrix.host }}"; exit 1
+              fi
+            fi
+          fi
+
+          echo "QT_ARCH=$QT_ARCH" >> "$GITHUB_ENV"
+          echo "QT_VER=$QT_VER"   >> "$GITHUB_ENV"
+          echo "arch=$QT_ARCH"    >> "$GITHUB_OUTPUT"
+          echo "ver=$QT_VER"      >> "$GITHUB_OUTPUT"
+          echo "Resolved: QT_VER=$QT_VER, QT_ARCH=$QT_ARCH"
 
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ steps.resolve.outputs.arch }}-v1
+          key: ${{ runner.os }}-qt-${{ steps.resolve.outputs.ver }}-${{ steps.resolve.outputs.arch }}-v1
 
       - name: Detect qtsvg module
         run: |
           set -e
-          ARCH="${QT_ARCH:-${{ matrix.qt_arch }}}"
-          MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VERSION}" "$ARCH" || true)
+          MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VER}" "${QT_ARCH}" || true)
           if echo "$MODS" | tr ' ' '\n' | grep -Fxq 'qtsvg'; then
             echo "AQT_MODULES=-m qtsvg" >> "$GITHUB_ENV"
           else
@@ -113,12 +126,11 @@ jobs:
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
           set -e
-          ARCH="${QT_ARCH:-${{ matrix.qt_arch }}}"
           mkdir -p "$QT_ROOT"
           python -m aqt install-qt \
-            "${{ matrix.host }}" desktop "${QT_VERSION}" \
+            "${{ matrix.host }}" desktop "${QT_VER}" \
             -O "$QT_ROOT" \
-            "$ARCH" \
+            "${QT_ARCH}" \
             ${AQT_MODULES}
 
       - name: Locate Qt (from Qt6Config.cmake)
@@ -130,8 +142,7 @@ jobs:
             exit 1
           fi
           Qt6_DIR="$(dirname "$QT_CONFIG")"
-          QT_PREFIX="$(dirname "$(dirname "$(dirname "$Qt6_DIR")")")"  # .../lib/cmake/Qt6 -> up 3 -> <arch>
-          echo "Qt6_DIR=$Qt6_DIR"            >> "$GITHUB_ENV"
+          QT_PREFIX="$(dirname "$(dirname "$(dirname "$Qt6_DIR")")")"   # .../lib/cmake/Qt6 -> up 3 -> <arch>
           echo "CMAKE_PREFIX_PATH=$QT_PREFIX" >> "$GITHUB_ENV"
           echo "== Qt6 found at =="
           echo "$QT_PREFIX"
