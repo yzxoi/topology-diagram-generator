@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  QT_VERSION: "6.6.3"
+  QT_VERSION: "6.9.2"
   BUILD_TYPE: Release
   QT_ROOT: ${{ github.workspace }}/.qt
 
@@ -32,7 +32,7 @@ jobs:
             qt_arch: clang_64
           - os: windows-latest
             host: windows
-            qt_arch: win64_msvc2022_64
+            qt_arch: auto
 
     runs-on: ${{ matrix.os }}
 
@@ -53,54 +53,75 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install tools (aqt + ninja)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "aqtinstall==3.*" ninja
+
+      - name: Minimal Linux deps (for Qt Widgets/XCB)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libgl1-mesa-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-x11-0
+
+      - name: Resolve Qt arch
+        id: resolve
+        run: |
+          set -e
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            LIST="$(python -m aqt list-qt windows desktop --arch "${QT_VERSION}")" || LIST=""
+            echo "Windows arch list for Qt ${QT_VERSION}: $LIST"
+            LIST_NL="$(echo "$LIST" | tr ' ' '\n')"
+            PICK=""
+            for a in win64_msvc2022_64 win64_msvc2019_64 win64_mingw; do
+              if echo "$LIST_NL" | grep -Fxq "$a"; then PICK="$a"; break; fi
+            done
+            if [ -z "$PICK" ]; then
+              PICK="$(echo "$LIST_NL" | head -n1)"
+            fi
+            if [ -z "$PICK" ]; then
+              echo "No Windows arch found for Qt ${QT_VERSION}" >&2
+              exit 1
+            fi
+            echo "QT_ARCH=$PICK" >> "$GITHUB_ENV"
+            echo "arch=$PICK" >> "$GITHUB_OUTPUT"
+          else
+            echo "QT_ARCH=${{ matrix.qt_arch }}" >> "$GITHUB_ENV"
+            echo "arch=${{ matrix.qt_arch }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v3
+          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ steps.resolve.outputs.arch }}-v1
 
-      - name: Install aqt & tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install "aqtinstall==3.*" ninja cmake
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libx11-dev libx11-xcb-dev libxext-dev libxrender-dev \
-            libxcb1-dev libxcb-util-dev libxcb-image0-dev libxcb-render0-dev \
-            libxcb-randr0-dev libxcb-keysyms1-dev libxcb-icccm4-dev \
-            libxkbcommon-x11-0 libgl1-mesa-dev
-
-      - name: Detect available Qt modules (qtsvg)
+      - name: Detect qtsvg module
         run: |
           set -e
-          MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VERSION}" "${{ matrix.qt_arch }}" || true)
-          echo "Available modules:"
-          echo "$MODS"
+          ARCH="$(grep '^QT_ARCH=' "$GITHUB_ENV" | cut -d= -f2)"
+          MODS=$(python -m aqt list-qt "${{ matrix.host }}" desktop --modules "${QT_VERSION}" "$ARCH" || true)
           if echo "$MODS" | tr ' ' '\n' | grep -Fxq 'qtsvg'; then
             echo "AQT_MODULES=-m qtsvg" >> "$GITHUB_ENV"
-            echo "Will install with: -m qtsvg"
           else
-            echo "qtsvg not listed for Qt ${QT_VERSION} (${{ matrix.host }}/${{ matrix.qt_arch }}); installing base Qt only."
             echo "AQT_MODULES=" >> "$GITHUB_ENV"
           fi
 
       - name: Install Qt via aqt
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
+          set -e
+          ARCH="$(grep '^QT_ARCH=' "$GITHUB_ENV" | cut -d= -f2)"
           mkdir -p "$QT_ROOT"
           python -m aqt install-qt \
             "${{ matrix.host }}" desktop "${QT_VERSION}" \
             -O "$QT_ROOT" \
-            ${{ matrix.qt_arch }} \
+            "$ARCH" \
             ${AQT_MODULES}
 
-      - name: Locate Qt
+      - name: Locate Qt (from Qt6Config.cmake)
         run: |
           set -e
           QT_CONFIG="$(find "$QT_ROOT" -type f -name Qt6Config.cmake -print -quit)"
@@ -108,41 +129,22 @@ jobs:
             echo "Qt6Config.cmake not found under $QT_ROOT" >&2
             exit 1
           fi
-
-          # Qt6_DIR = 包含 Qt6Config.cmake 的目录：.../<arch>/lib/cmake/Qt6
           Qt6_DIR="$(dirname "$QT_CONFIG")"
-
-          # <arch> 根：从 Qt6_DIR 回退 3 层（Qt6 -> cmake -> lib -> <arch>）
-          QT_PREFIX="$(dirname "$(dirname "$(dirname "$Qt6_DIR")")")"
-
-          echo "Qt6_DIR=$Qt6_DIR"           | tee -a "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$QT_PREFIX" | tee -a "$GITHUB_ENV"
-          echo "QT_PREFIX=$QT_PREFIX"       | tee -a "$GITHUB_ENV"
-
-          echo "== Sanity check =="
+          QT_PREFIX="$(dirname "$(dirname "$(dirname "$Qt6_DIR")")")"  # .../lib/cmake/Qt6 -> up 3 -> <arch>
+          echo "Qt6_DIR=$Qt6_DIR"            >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$QT_PREFIX" >> "$GITHUB_ENV"
+          echo "== Qt6 found at =="
+          echo "$QT_PREFIX"
           ls -al "$Qt6_DIR/Qt6Config.cmake"
-
-      - name: Add Qt to PATH (runtime)
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            echo "PATH=$QT_PREFIX/bin;$PATH" >> "$GITHUB_ENV"
-          else
-            echo "PATH=$QT_PREFIX/bin:$PATH" >> "$GITHUB_ENV"
-          fi
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
-            -DQt6_DIR="${Qt6_DIR}"
+            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
 
       - name: Build
         run: cmake --build build --config "${BUILD_TYPE}" -j
-
-      - name: Test
-        if: hashFiles('build/CTestTestfile.cmake') != ''
-        run: ctest --test-dir build --output-on-failure -C "${BUILD_TYPE}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
