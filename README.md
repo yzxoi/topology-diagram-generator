@@ -1,0 +1,152 @@
+## 拓扑图生成器 (C++/Qt6)
+
+一个参数化二维(伪)拓扑图生成工具。支持按特定参数生成图案，实时渲染、交互浏览，并可导出 PNG/SVG。
+
+### 构建与运行
+本项目依赖以下环境：
+- CMake >= 3.21
+- C++17 编译器（clang++ / g++ / MSVC）
+- Qt6
+
+
+#### macOS / Ubuntu / Debian
+推荐使用 Homebrew 安装 Qt6 和 CMake：
+```bash
+brew install cmake qt@6
+```
+
+或在 Ubuntu / Debian 平台下：
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake qt6-base-dev qt6-base-dev-tools
+```
+
+构建与运行：
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 8
+./build/src/topology_diagram_generator
+```
+
+#### Windows
+
+推荐使用 Visual Studio 2022，确保已安装并正确配置：
+- Visual Studio 2022（包含 “Desktop development with C++” 工作负载）
+- Qt 6.x for MSVC 2022 64-bit
+- CMake 3.21+
+
+打开 x64 Native Tools Command Prompt for VS 2022
+
+```bash
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.x\msvc2022_64"
+cmake --build build --config Release
+
+build\Release\topology_diagram_generator.exe
+```
+
+### 使用说明
+
+#### Concentric Mode
+
+用若干条同心“环”快速生成网状结构。每一环是等角采样的圆周点，角度带少量随机抖动；可选择是否把每一环封成多边形边，并把外层点连接到内层就近的 2 个点，形成稠密的网状结构。
+
+##### 输入方法
+- Radii per Ring: 各环半径序列（从外到内或内到外都可，代码按顺序生成）。
+- Sides per Ring: 各环点数（即“n_i 边形”的 n_i）。
+- Ring Jitter: 每个点的角度抖动（度），用于艺术化。
+- Connect nodes in round: 是否画每一环的“环边”（首尾相连）。
+- Connect two nearest: 是否把每个外环点连接到内环的两个最近点。
+
+##### 生成方式
+对第 $i$ 个环：
+ 1. 半径 $radius = r[i]$；点数 $\texttt{n\_points} = \texttt{nSides}[i]$。
+ 2. 第 $j$ 个点角度：$\theta = 2 \pi * j / \texttt{n\_points} + U(-\texttt{jitter}, +\texttt{jitter})$。
+ 3. 极坐标转直角坐标，压入节点表，同时把每个环的节点 $\texttt{id}$ 存到 $\texttt{rings}[i]$。
+
+这里的“多边形”本质上是等角采样的圆。
+
+##### 复杂度分析：
+- 点生成：$\mathcal O(\sum n_i)$
+- 层内环边：$\mathcal O(\sum n_i)$
+- 层间连接：对每对相邻环是 $\mathcal O(n_i \cdot n_{i+1})$
+
+#### Layered Polygon Mode
+
+按“外→内”绘制 $n_i$ 边形；每条边上还能细分 $0/1/2$ 个额外点（支持对称偏移）；层内可选画环边和星形对角线；层间连接支持 $1→1$ 最近和$1→2$ 扩展（还可交替左右）；中心点必连最内层。
+
+##### 输入
+ - Num Layers: 层数（建议 3–4）。
+ - Layer N Sides: 本层多边形边数 $n_l$（≥3）
+ - Layer Radii: 本层半径 r_l
+ - Layer Phase Deg: 本层起始角（度）——可用来做“外内五边形相差 36°”等错位
+ - Layer Subdiv Per Edge ∈ {0,1,2}：每条边细分点个数
+ - Layer Subdiv Offset ∈ [0,0.5]：细分点比例（0.5=等分；≈1/3=三等分；p 与 1–p 成对保持对称）
+ - Layer Draw Rim: 是否画本层环边
+ - Layer Draw Diagonals / skipK: 是否画星形/对角（跳步 $k$）
+ - Inter-Layer 1-1: 是否连“最近 1 点”
+ - Inter-Layer 1-2: 是否在 1→1 的基础上再连一个邻近点（总计两条）
+ - Inter-Layer Zigzag: 若开，则两条邻边在“左/右”间随外层点奇偶交替
+ - Jitter Deg（对顶点角小抖动）、seed、Connect to Center（中心必连最内层）
+
+##### 生成方式
+对第 $l$ 层：
+ 1. 先生成 正 $n_l$ 多边形顶点，半径 $R = \texttt{radius}$。
+ 2. 沿每条边 $\overline{AB}$ 追加细分点：
+    - $\texttt{subdiv}=1$：加入 $(A+B)/2$ 或 $(1-p)A + pB$
+    - $\texttt{subdiv}=2$：加入 $(1-p)A + pB$ 与 $pA + (1-p)B$（关于边中点对称）
+ 3. 把“端点 + 细分点”按边顺序压入 $\texttt{ringIds}[l]$，并保存它们的极角 $\texttt{atan2}(y,x)$ 到 $\texttt{ringAng}[l]$。
+
+由于细分点是线性插值，它们的极角不均匀，但我们统一用 atan2 作为映射依据，因此鲁棒性得以保证。
+
+连边
+ - drawRim=true：按 $\texttt{ringIds}$[l] 的顺序相邻相连（封圈）。
+ - drawDiagonals=true：以跳步 skipK 画星形/对角线（同环内部的“M/skipK”连接）。
+ - Inter-Layer 1-2=true：再连该最近点的左/右邻居之一。
+ - Inter-Layer Zigzag=true，对外层点按奇偶交替选择左/右。
+
+##### 复杂度 & 视觉特征
+ - 点生成：$\mathcal O(\sum_l n_l \cdot (1+\text{subdiv}_l))$
+ - 层内环边/对角：$\mathcal O(\sum_l M_l)$（$M_l$ 为本层实际点数）
+ - 层间连接：每对相邻层 $\mathcal O(M_l \cdot M_{l+1})$（线性找最近角）
+
+### 目录结构
+
+The project follows a standard C++/Qt structure, separating core logic, UI, and view components.
+
+```
+.  
+├── CMakeLists.txt      # Root CMake file, configures the build and finds Qt.
+├── README.md           # This file.
+└── src/
+    ├── CMakeLists.txt  # Defines the executable and its source files.
+    ├── main.cpp        # Application entry point.
+    │
+    ├── core/           # Core data structures and generation algorithm.
+    │   ├── Params.h    # Defines the parameter struct for the generator.
+    │   ├── NodeEdge.h  # Defines the basic Node and Edge data structures.
+    │   └── TopologyGenerator.cpp/h # The main generation algorithm.
+    │
+    ├── ui/             # Main window and UI setup.
+    │   └── MainWindow.cpp/h      # Main application window, builds UI controls.
+    │
+    └── view/           # 2D visualization components.
+        ├── TopologyView.cpp/h    # QGraphicsView subclass, handles zoom/pan.
+        ├── TopologyScene.cpp/h   # QGraphicsScene, populates the scene with items.
+        ├── NodeItem.cpp/h        # QGraphicsItem for a single node, handles movement.
+        └── EdgeItem.cpp/h        # QGraphicsItem for an edge connecting two nodes.
+```
+
+#### 文件功能 (File Functionality)
+
+- **`main.cpp`**: Creates and displays the `MainWindow`.
+- **`core/`**: Contains the heart of the topology generation logic.
+  - `TopologyGenerator.cpp`: Implements the "Polar-Topology" algorithm to generate a graph of nodes and edges based on a set of parameters.
+  - `Params.h`: Defines the `Params` struct which holds all controllable parameters for the generator, including symmetry, rings, connection rules, and style presets.
+  - `NodeEdge.h`: Provides the simple `Node` (ID, position) and `Edge` (from/to IDs) structs.
+- **`ui/`**: Manages the user interface.
+  - `MainWindow.cpp`: Sets up the main window, all UI controls (sliders, checkboxes), and connects them to actions.
+- **`view/`**: Responsible for rendering the diagram on screen.
+  - `TopologyScene.cpp`: Manages the `QGraphicsScene`. It calls the `TopologyGenerator` to get the graph data and is responsible for creating and adding the visual `NodeItem` and `EdgeItem` objects to the scene.
+  - `TopologyView.cpp`: A `QGraphicsView` that acts as the viewport for the scene. It handles user interactions like zooming with the mouse wheel and panning the view.
+  - `NodeItem.cpp`: A custom `QGraphicsItem` that visually represents a node (a circle). It is set to be movable and focusable, allowing the user to drag it. It also notifies connected edges when it moves.
+  - `EdgeItem.cpp`: A custom `QGraphicsItem` that visually represents an edge (a line) connecting two `NodeItem`s.

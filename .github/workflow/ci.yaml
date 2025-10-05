@@ -1,0 +1,81 @@
+name: CI (Qt6 / CMake / C++17)
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.build_type }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        build_type: [Release]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------- Install Ninja ----------
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install ninja
+
+      - name: Install deps (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja --no-progress
+
+      # --------- Install Qt 6 ----------
+      - name: Set up Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          cache: true
+          modules: 'qtbase'
+
+      # --------- Configure & Build ----------
+      - name: Configure (CMake + Ninja)
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DCMAKE_PREFIX_PATH="$QTDIR"
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j 8
+
+      # --------- (Optional) Smoke Test ----------
+      - name: Run (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          (./build/src/topology_diagram_generator --version) || true
+
+      - name: Run (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          (build\src\topology_diagram_generator.exe --version) || ver
+
+      # --------- Upload Artifacts ----------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-${{ runner.os }}-${{ matrix.build_type }}
+          if-no-files-found: warn
+          path: |
+            build/src/topology_diagram_generator*
+            build/src/*.exe
+            build/src/*.dll
+            build/src/*.dylib
+            build/src/*.so
