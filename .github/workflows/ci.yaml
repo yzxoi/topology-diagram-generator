@@ -15,31 +15,26 @@ concurrency:
 
 env:
   QT_VERSION: "6.6.3"
-  BUILD_TYPE: "Release"
+  BUILD_TYPE: Release
   QT_ROOT: ${{ github.workspace }}/.qt
 
 jobs:
   build:
-    name: ${{ matrix.os }} | Qt ${{ env.QT_VERSION }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             host: linux
-            target: desktop
             qt_arch: gcc_64
           - os: macos-latest
             host: mac
-            target: desktop
             qt_arch: clang_64
           - os: windows-latest
             host: windows
-            target: desktop
             qt_arch: win64_msvc2022_64
 
     runs-on: ${{ matrix.os }}
-
     defaults:
       run:
         shell: bash
@@ -62,14 +57,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v1
+          key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-qtsvg-v2
 
-      - name: Install aqtinstall + build tools
+      - name: Install aqt & tools
         run: |
           python -m pip install --upgrade pip
-          pip install aqtinstall==3.* ninja cmake
+          pip install "aqtinstall==3.*" ninja cmake
 
-      - name: Install Linux dependencies
+      - name: Install Linux deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -83,45 +78,43 @@ jobs:
       - name: Install Qt via aqt
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "${QT_ROOT}"
+          mkdir -p "$QT_ROOT"
           python -m aqt install-qt \
-            "${{ matrix.host }}" "${{ matrix.target }}" "${QT_VERSION}" \
-            -O "${QT_ROOT}" \
+            "${{ matrix.host }}" desktop "${QT_VERSION}" \
+            -O "$QT_ROOT" \
             ${{ matrix.qt_arch }} \
             -m qtsvg
 
       - name: Locate Qt
         run: |
-          QT_DIR=$(python - <<'PY'
-import os, glob
-root = os.environ["QT_ROOT"]
-candidates = sorted(glob.glob(os.path.join(root, "**", "lib", "cmake", "Qt6")), key=len)
-if not candidates:
-    raise SystemExit("Qt6 CMake package not found under " + root)
-qt_dir = os.path.dirname(os.path.dirname(candidates[0]))  # .../lib/cmake/Qt6 -> .../
-print(qt_dir)
-PY
-          )
-          echo "QT_DIR=$QT_DIR"
-          echo "QT_DIR=$QT_DIR" >> "$GITHUB_ENV"
+          set -e
+          QT_CONFIG=$(find "$QT_ROOT" -type f -name Qt6Config.cmake -print -quit)
+          if [ -z "$QT_CONFIG" ]; then
+            echo "Qt6Config.cmake not found under $QT_ROOT" >&2
+            exit 1
+          fi
+          # .../<arch>/lib/cmake/Qt6/Qt6Config.cmake -> .../<arch>
+          QT_DIR=$(dirname "$(dirname "$(dirname "$QT_CONFIG")")")
+          echo "QT_DIR=$QT_DIR" | tee -a "$GITHUB_ENV"
+          echo "Qt6_DIR=$QT_DIR/lib/cmake/Qt6" | tee -a "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$QT_DIR" | tee -a "$GITHUB_ENV"
+          echo "Found Qt at: $QT_DIR"
+          ls -al "$QT_DIR/lib/cmake/Qt6/Qt6Config.cmake"
 
-      - name: Configure (CMake)
+      - name: Configure
         run: |
-          cmake -S . -B build \
-            -G Ninja \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="${QT_DIR}"
+            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
 
       - name: Build
-        run: |
-          cmake --build build --config "${BUILD_TYPE}" -j
+        run: cmake --build build --config "${BUILD_TYPE}" -j
 
       - name: Test
-        if: hashFiles('CTestTestfile.cmake', 'build/CTestTestfile.cmake') != ''
-        run: |
-          ctest --test-dir build --output-on-failure -C "${BUILD_TYPE}"
+        if: hashFiles('build/CTestTestfile.cmake') != ''
+        run: ctest --test-dir build --output-on-failure -C "${BUILD_TYPE}"
 
-      - name: Upload build artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ runner.os }}
