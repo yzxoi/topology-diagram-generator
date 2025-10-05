@@ -59,8 +59,8 @@ build\Release\topology_diagram_generator.exe
 
 ##### 生成方式
 对第 $i$ 个环：
- 1. 半径 $radius = r[i]$；点数 $\texttt{n\_points} = \texttt{nSides}[i]$。
- 2. 第 $j$ 个点角度：$\theta = 2 \pi * j / \texttt{n\_points} + U(-\texttt{jitter}, +\texttt{jitter})$。
+ 1. 半径 $radius = r[i]$；点数 $\texttt{n} = \texttt{nSides}[i]$。
+ 2. 第 $j$ 个点角度：$\theta = 2 \pi * j / \texttt{n} + U(-\texttt{jitter}, +\texttt{jitter})$。
  3. 极坐标转直角坐标，压入节点表，同时把每个环的节点 $\texttt{id}$ 存到 $\texttt{rings}[i]$。
 
 这里的“多边形”本质上是等角采样的圆。
