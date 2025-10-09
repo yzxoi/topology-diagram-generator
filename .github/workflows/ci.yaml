@@ -15,7 +15,7 @@ concurrency:
 
 env:
   QT_VERSION: "6.9.2"
-  QT_VERSION_FALLBACK: "6.6.3"
+  QT_VERSION_FALLBACK: "6.7.3"
   BUILD_TYPE: Release
   QT_ROOT: ${{ github.workspace }}/.qt
 
