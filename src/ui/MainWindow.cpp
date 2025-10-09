@@ -195,8 +195,8 @@ void MainWindow::setupLayeredControls(QWidget *parent)
 	m_jitterDegSpin->setSuffix(" deg");
 
 	m_seedSpin = new QSpinBox(m_layeredGroup);
-	m_seedSpin->setRange(0, 999999);
-	m_seedSpin->setValue(42);
+	m_seedSpin->setRange(0, 9999999);
+	m_seedSpin->setValue(1314520);
 
 	m_connectCenterCheck = new QCheckBox("Connect to Center", m_layeredGroup);
 	m_connectCenterCheck->setChecked(true);
