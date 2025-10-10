@@ -4,7 +4,7 @@
 #include <string>
 #include "LayeredParams.h"
 
-// Parameters for the Polar-Topology generator
+// Parameters for the topology generator
 struct Params
 {
 	unsigned int seed = 1314520;
