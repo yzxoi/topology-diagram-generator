@@ -8,7 +8,6 @@
 - C++17 编译器（clang++ / g++ / MSVC）
 - Qt6
 
-
 #### macOS / Ubuntu / Debian
 推荐使用 Homebrew 安装 Qt6 和 CMake：
 ```bash
@@ -149,3 +148,75 @@ The project follows a standard C++/Qt structure, separating core logic, UI, and 
   - `TopologyView.cpp`: A `QGraphicsView` that acts as the viewport for the scene. It handles user interactions like zooming with the mouse wheel and panning the view.
   - `NodeItem.cpp`: A custom `QGraphicsItem` that visually represents a node (a circle). It is set to be movable and focusable, allowing the user to drag it. It also notifies connected edges when it moves.
   - `EdgeItem.cpp`: A custom `QGraphicsItem` that visually represents an edge (a line) connecting two `NodeItem`s.
+
+### 三个思考
+
+#### 1. 如何设计高效算法，处理大量节点和边的动态更新？
+
+在本项目中，动态更新主要通过 `TopologyGenerator` 类来处理，其采用了一种分层的方法来生成拓扑结构。
+
+在 `src/core/NodeEdge.h` 文件中定义了节点（Node）和边（Edge）的结构体。
+
+`TopologyGenerator` 类中的 `generate` 方法是拓扑生成的核心。当节点或边发生变化时，我们会重新调用以更新拓扑结构。
+```c++
+// src/core/TopologyGenerator.cpp
+void TopologyGenerator::generate(const std::vector<Node>& nodes, const std::vector<Edge>& edges) {
+	// ...
+}
+```
+
+虽然当前的更新方法为全量更新，但考虑到绘制的时间复杂度极低（具体分析见 `README.md` 的“生成方法“），故这是可接受的。
+
+#### 2. 如何设计用户体验良好的图形界面？
+
+在本项目中，我们使用 Qt 来构建图形界面，这是一个非常成熟的跨平台的 UI 框架。
+
+主要的UI组件:
+- `src/ui/MainWindow.h(cpp)`: 应用的主窗口，负责整体的布局和用户交互。
+- `TopologyView` 和 `TopologyScene` (`src/view/`): 图形化拓扑图的核心显示区域。`TopologyView` 是一个 `QGraphicsView`，用于显示 `TopologyScene`（一个 `QGraphicsScene`）
+- `NodeItem` 和 `EdgeItem` (`src/view/`): 这两个类分别继承自 `QGraphicsItem`，用于在场景中绘制节点和边。它们封装了各自的绘制逻辑和交互（如拖拽、点击等）。
+
+```c++
+// src/view/NodeItem.h
+class NodeItem : public QGraphicsEllipseItem {
+public:
+    explicit NodeItem(const QPointF &pos, QGraphicsItem *parent = nullptr);
+    void addEdge(EdgeItem *edge);
+    void removeAllEdges();
+
+protected:
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
+//重写节点状态改变
+private:
+    std::vector<EdgeItem*> m_edges;
+};
+```
+
+#### 3. 如何生成高质量的图形化拓扑图并保存为图片文件？
+
+QGraphicsScene 和 QGraphicsView 提供了将场景内容导出为图片的功能。
+
+```c++
+//src/ui/MainWindow.cpp
+void MainWindow::onExportPNG()
+{
+	const QString fileName = QFileDialog::getSaveFileName(this, "保存为PNG", "topology.png", "PNG (*.png)");
+	if (fileName.isEmpty())
+		return;
+	//弹出文件保存对话框获取保存路径
+	const QRectF sourceRect = m_view->mapToScene(m_view->viewport()->rect()).boundingRect();
+	//获取视图可见区域作为截图范围
+	QImage image(sourceRect.size().toSize(), QImage::Format_ARGB32_Premultiplied);
+	image.fill(Qt::white);
+	//创建白色背景的QImage对象
+	QPainter painter(&image);
+	painter.setRenderHint(QPainter::Antialiasing, true);
+	m_scene->render(&painter, QRectF(), sourceRect);
+	//使用QPainter将场景渲染到图像上
+	image.save(fileName);
+	statusBar()->showMessage("已导出PNG: " + fileName, 3000);
+	//保存图像文件
+}
+```
+
+导出成 svg 同理，获取视图可见区域导出源图形，并创建 svg 生成器即可。
