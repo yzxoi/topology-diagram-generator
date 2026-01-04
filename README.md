@@ -220,3 +220,6 @@ void MainWindow::onExportPNG()
 ```
 
 导出成 svg 同理，获取视图可见区域导出源图形，并创建 svg 生成器即可。
+
+### Poster
+![](poster.jpg)
